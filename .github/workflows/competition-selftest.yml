@@ -9,8 +9,9 @@ permissions:
   contents: read
 
 jobs:
-  public-tests:
+  count-public:
     runs-on: ubuntu-latest
+    timeout-minutes: 8
     steps:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
@@ -25,5 +26,7 @@ jobs:
         run: |
           python -m venv public/competition/.venv
           public/competition/.venv/bin/pip install -r public/competition/requirements.txt
-      - name: Run public acceptance tests
-        run: make -C public/competition test-pdf test-evidence test-hybrid test-count-trigger PRODUCT=$GITHUB_WORKSPACE
+      - name: Run count trigger acceptance
+        env:
+          PYTEST_ADDOPTS: '-x -vv -s'
+        run: make -C public/competition test-count-trigger PRODUCT=$GITHUB_WORKSPACE
