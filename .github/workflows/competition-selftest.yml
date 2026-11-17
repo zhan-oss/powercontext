@@ -25,5 +25,5 @@ jobs:
         run: |
           python -m venv public/competition/.venv
           public/competition/.venv/bin/pip install -r public/competition/requirements.txt
-      - name: Run public PDF and evidence acceptance
-        run: make -C public/competition test-pdf test-evidence PRODUCT=$GITHUB_WORKSPACE
+      - name: Run public acceptance tests
+        run: make -C public/competition test-pdf test-evidence test-count-trigger PRODUCT=$GITHUB_WORKSPACE
