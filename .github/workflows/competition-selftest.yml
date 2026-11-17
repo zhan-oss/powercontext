@@ -1,6 +1,8 @@
 name: Competition self-test
 
 on:
+  push:
+    branches: [codex/competition-2026]
   workflow_dispatch:
 
 permissions:
