@@ -56,6 +56,21 @@ from powercontext.limits import (
 
 SHARED_METADATA = MetaData()
 
+SOURCE_LIFECYCLE_NODES_TABLE = Table(
+    "pc_source_lifecycle_nodes",
+    SHARED_METADATA,
+    Column("scope_id", String(128), primary_key=True),
+    Column("node_id", String(256), primary_key=True),
+    Column("kind", String(16), nullable=False),
+    Column("reference", Text, nullable=False),
+    Column("parents", Text, nullable=False),
+    Column("policy", String(8), nullable=False),
+    Column("revision", Integer, nullable=False),
+    Column("available", Boolean, nullable=False),
+    Column("sequence", Integer, nullable=False),
+    Column("last_event", Text),
+)
+
 MYSQL_IDENTITY_COLLATION = "utf8mb4_bin"
 
 
@@ -896,6 +911,7 @@ RECALL_TOKEN_DAILY_TABLE = Table(
 )
 
 SHARED_TABLES = (
+    SOURCE_LIFECYCLE_NODES_TABLE,
     SOURCE_JOURNAL_HEADS_TABLE,
     SOURCES_TABLE,
     ARTIFACTS_TABLE,
