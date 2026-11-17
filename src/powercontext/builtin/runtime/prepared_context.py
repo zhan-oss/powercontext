@@ -17,6 +17,8 @@
 from __future__ import annotations
 
 import json
+import re
+from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from itertools import chain
@@ -106,6 +108,7 @@ class PreparedContextBuild:
     origins: tuple[PreparedContextOrigin, ...]
     omissions: PreparedContextOmissions = PreparedContextOmissions()
     code_origins: tuple[CodeEvidenceRef, ...] = ()
+    fragments: tuple[PreparedEvidenceFragment, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -115,6 +118,14 @@ class MemoryEntryAddress:
     memory: ArtifactAddress
     entry_id: str
     entry_version_id: str
+
+
+@dataclass(frozen=True)
+class PreparedEvidenceFragment:
+    address: MemoryEntryAddress
+    start: int
+    end: int
+    text: str
 
 
 PreparedContextOrigin = MemoryCitation | ArtifactRef | MemoryEntryAddress | ArtifactAddress
@@ -211,6 +222,8 @@ class PreparedContextBuilder:
         profile_candidates: Sequence[PreparedProfileCandidate] = (),
         code_candidates: Sequence[PreparedCodeCandidate] = (),
     ) -> PreparedContextBuild:
+        if request.evidence_selection:
+            return self._select_evidence(request, current_scope_id, memory_candidates)
         if request.include_code:
 
             def historical(history_request: PrepareContextRequest, entries: int) -> PreparedContextBuild:
@@ -254,6 +267,98 @@ class PreparedContextBuilder:
             context=PreparedContext(status="ready", content=content, content_bytes=content_bytes),
             origins=origins,
             omissions=omissions,
+        )
+
+    def _select_evidence(
+        self,
+        request: PrepareContextRequest,
+        current_scope_id: str | None,
+        memory_candidates: Sequence[PreparedMemoryCandidates],
+    ) -> PreparedContextBuild:
+        """Choose literal sentence spans using query overlap and actual wire cost."""
+        stop = {"a", "an", "the", "of", "to", "for", "in", "on", "is", "are", "was", "were", "what",
+                "which", "how", "many", "much", "did", "does", "do", "and", "or", "by", "with", "from",
+                "as", "it", "that", "this", "these", "those", "its", "their", "can", "could", "should"}
+        query_terms = [word for word in re.findall(r"[a-z]+|\d+", request.query.lower()) if word not in stop]
+        query_set = set(query_terms)
+        candidates: list[tuple[float, PreparedEvidenceFragment]] = []
+        for group_rank, group in enumerate(memory_candidates):
+            for hit_rank, hit in enumerate(group.hits):
+                if group.memory_ref is None or hit.memory_ref != group.memory_ref or not hit.text.strip():
+                    continue
+                address = MemoryEntryAddress(
+                    memory=ArtifactAddress(scope_id=group.scope_id or current_scope_id or "", artifact=hit.memory_ref),
+                    entry_id=hit.entry_id,
+                    entry_version_id=hit.entry_version_id,
+                )
+                # Sentence boundaries are character offsets in the original entry.
+                spans = list(re.finditer(r"[^.!?\n]+(?:[.!?]+|\n|$)", hit.text))
+                for index, match in enumerate(spans):
+                    start, end = match.span()
+                    while start < end and hit.text[start].isspace():
+                        start += 1
+                    while end > start and hit.text[end - 1].isspace():
+                        end -= 1
+                    if end <= start:
+                        continue
+                    text = hit.text[start:end]
+                    words = Counter(re.findall(r"[a-z]+|\d+", text.lower()))
+                    overlap = sum(min(words[word], query_terms.count(word)) for word in query_set)
+                    if overlap == 0:
+                        continue
+                    # A neighboring sentence often completes a multi-sentence fact.
+                    for span_end in (end, spans[index + 1].end() if index + 1 < len(spans) else end):
+                        fragment_text = hit.text[start:span_end].rstrip()
+                        if not fragment_text:
+                            continue
+                        fragment = PreparedEvidenceFragment(address, start, start + len(fragment_text), fragment_text)
+                        fragment_words = Counter(re.findall(r"[a-z]+|\d+", fragment_text.lower()))
+                        fragment_overlap = sum(min(fragment_words[word], query_terms.count(word)) for word in query_set)
+                        score = fragment_overlap / max(1, len(fragment_text) ** 0.35) + 0.002 / (1 + hit_rank + group_rank)
+                        candidates.append((score, fragment))
+        candidates.sort(key=lambda pair: (-pair[0], pair[1].address.memory.scope_id,
+                                          pair[1].address.entry_id, pair[1].start))
+        selected: list[PreparedEvidenceFragment] = []
+        rendered: list[dict[str, object]] = []
+        covered: set[tuple[str, str, int, int]] = set()
+
+        def render(items: list[dict[str, object]]) -> str:
+            envelope = {"trust": "untrusted_history", "items": items}
+            encoded = json.dumps(envelope, ensure_ascii=False, separators=(",", ":"))
+            return "\n\n".join((TRUST_POLICY, f"{_BEGIN_MARKER}\n{encoded}\n{_END_MARKER}"))
+
+        for _, fragment in candidates:
+            address = fragment.address
+            identity = (address.memory.scope_id, address.entry_id, fragment.start, fragment.end)
+            if identity in covered:
+                continue
+            if any(
+                prior.address == address and fragment.start < prior.end and prior.start < fragment.end
+                for prior in selected
+            ):
+                continue
+            citation = {"scope_id": address.memory.scope_id,
+                        "memory_ref": address.memory.artifact.model_dump(mode="json"),
+                        "entry_id": address.entry_id,
+                        "entry_version_id": address.entry_version_id}
+            item = {"citation": citation, "content": fragment.text,
+                    "start": fragment.start, "end": fragment.end}
+            trial = render([*rendered, item])
+            if len(trial.encode("utf-8")) > request.max_bytes:
+                continue
+            covered.add(identity)
+            selected.append(fragment)
+            rendered.append(item)
+            if len(selected) >= self.entry_limit:
+                break
+        if not selected:
+            return PreparedContextBuild(context=self.empty(), origins=(), fragments=())
+        content = render(rendered)
+        origins = tuple(fragment.address for fragment in selected)
+        return PreparedContextBuild(
+            context=PreparedContext(status="ready", content=content, content_bytes=len(content.encode("utf-8"))),
+            origins=origins,
+            fragments=tuple(selected),
         )
 
     def probe_budget(
