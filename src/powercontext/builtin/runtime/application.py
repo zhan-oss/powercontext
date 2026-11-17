@@ -567,7 +567,12 @@ class ScopedRecordApplication:
         /,
     ) -> ArtifactCreated:
         async with self._runtime._scope_operation(self.scope_id), self._runtime._locked(self.scope_id):
-            return await self._runtime._records().create_artifact(self.scope_id, family, write)
+            created = await self._runtime._records().create_artifact(self.scope_id, family, write)
+        # Artifact creation appends a lineage-only Source to the journal. It
+        # counts toward source-count processing even though it is not evidence.
+        if self._runtime.artifact_processing_supervisor is not None:
+            self._runtime.artifact_processing_supervisor.wake()
+        return created
 
     async def get_artifact(self, family: str, artifact_id: str, /) -> ArtifactRecord:
         async with self._runtime._scope_operation(self.scope_id):
