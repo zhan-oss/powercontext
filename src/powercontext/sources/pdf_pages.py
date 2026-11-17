@@ -105,24 +105,59 @@ PDF_PAGE_SOURCE_DEFINITION = AdapterSourceDefinition(PDFPageAdapter(), projectio
 async def search_pdf_pages(memory, question: str, limit: int = 10) -> tuple[MemoryCitation, ...]:
     if not isinstance(question, str) or not question.strip() or type(limit) is not int or limit < 1:
         raise ValueError("Invalid PDF search request")
-    # The FTS engine ranks the complete question. A short content-word query
-    # supplements it when conversational filler dominates the question.
     tokens = re.findall(r"[a-z]+|\d+", question.lower())
     stop = {"a", "an", "the", "of", "to", "for", "in", "on", "is", "are", "was", "were", "what", "which",
-            "how", "many", "much", "did", "does", "do", "and", "or", "by", "with", "from", "as", "it"}
-    focused = " ".join(token for token in tokens if token not in stop)
-    searches = [focused, question] if focused and focused != question.lower() else [question]
-    found: list[MemoryCitation] = []
-    seen: set[tuple[str, str, str]] = set()
-    for query in searches:
-        result = await memory.search(SearchMemoryRequest(query=query, mode="fts", limit=min(max(limit, 20), 100)))
-        for hit in result.hits:
+            "how", "many", "much", "did", "does", "do", "and", "or", "by", "with", "from", "as", "it",
+            "this", "that", "these", "those", "has", "have", "had", "if", "then", "state", "give", "answer",
+            "respond", "question", "using", "use", "shown", "details", "report", "reported", "fy"}
+    content = [token for token in tokens if token not in stop]
+    # Long natural-language questions often ask for evidence in several parts
+    # of a report. Search each part independently, then reserve places for
+    # their best pages instead of letting one generic term fill the top 20.
+    variants: list[str] = []
+    def add_variant(parts: list[str]) -> None:
+        query = " ".join(dict.fromkeys(parts))
+        if query and query not in variants:
+            variants.append(query)
+
+    add_variant(content)
+    if len(content) >= 6:
+        midpoint = len(content) // 2
+        add_variant(content[:midpoint])
+        add_variant(content[midpoint:])
+    distinctive = [token for token in content if len(token) >= 6 and not token.isdigit()]
+    if len(distinctive) >= 2:
+        add_variant(distinctive)
+    add_variant(tokens)
+    rankings: list[list[MemoryCitation]] = []
+    scores: dict[tuple[str, str, str], float] = {}
+    citations: dict[tuple[str, str, str], MemoryCitation] = {}
+    for query in variants:
+        result = await memory.search(SearchMemoryRequest(query=query, mode="fts", limit=max(limit, 40)))
+        ranking: list[MemoryCitation] = []
+        for rank, hit in enumerate(result.hits):
             key = (hit.memory_ref.artifact_id, hit.entry_id, hit.entry_version_id)
-            if key in seen:
-                continue
-            seen.add(key)
-            found.append(MemoryCitation(memory_ref=hit.memory_ref, entry_id=hit.entry_id,
-                                        entry_version_id=hit.entry_version_id))
-            if len(found) >= limit:
-                return tuple(found)
-    return tuple(found)
+            citation = MemoryCitation(memory_ref=hit.memory_ref, entry_id=hit.entry_id,
+                                      entry_version_id=hit.entry_version_id)
+            citations[key] = citation
+            scores[key] = scores.get(key, 0.0) + 1.0 / (20 + rank)
+            ranking.append(citation)
+        rankings.append(ranking)
+
+    selected: list[MemoryCitation] = []
+    selected_keys: set[tuple[str, str, str]] = set()
+    def append(citation: MemoryCitation) -> None:
+        key = (citation.memory_ref.artifact_id, citation.entry_id, citation.entry_version_id)
+        if key not in selected_keys and len(selected) < limit:
+            selected_keys.add(key)
+            selected.append(citation)
+
+    for key in sorted(scores, key=lambda item: (-scores[item], item))[: max(1, limit // 2)]:
+        append(citations[key])
+    for rank in range(max((len(ranking) for ranking in rankings), default=0)):
+        for ranking in rankings:
+            if rank < len(ranking):
+                append(ranking[rank])
+            if len(selected) >= limit:
+                return tuple(selected)
+    return tuple(selected)
