@@ -214,6 +214,7 @@ from powercontext.builtin.runtime.models import (
     TopicMemoryFlushResult,
 )
 from powercontext.builtin.runtime.prepared_code import PreparedCodeCandidate, code_candidates
+from powercontext.builtin.runtime.source_lifecycle import SourceLifecycleApplication
 from powercontext.builtin.runtime.prepared_context import (
     PreparedContextBuild,
     PreparedContextBuilder,
@@ -2692,6 +2693,12 @@ class ScopedTopicMemoryApplication:
                     query_embedding,
                     embedding_timeout_seconds,
                 )
+        inactive = await self._runtime.lifecycle.for_scope(self.scope_id).inactive_topics()
+        if inactive:
+            result = result.model_copy(update={
+                "hits": tuple(hit for hit in result.hits
+                              if (hit.artifact_ref.artifact_id, hit.artifact_ref.revision) not in inactive)
+            })
         observer = self._runtime._topic_memory_search_observer
         if observer is not None:
             try:
@@ -3125,6 +3132,7 @@ class BuiltinRuntime:
         self._scheduler: AsyncIOScheduler | None = None
         self._scheduler_runtime_key: str | None = None
         self.sources = SourceApplication(self)
+        self.lifecycle = SourceLifecycleApplication(self)
         self.ingestion = RemoteIngestionApplication(self, remote_ingestion)
         self.code = CodeApplication(self, code_service or CodeService(CodeConfig()))
         self.context = ContextApplication(self)
