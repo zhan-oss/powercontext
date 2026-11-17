@@ -132,6 +132,7 @@ async def search_pdf_pages(memory, question: str, limit: int = 10) -> tuple[Memo
     rankings: list[list[MemoryCitation]] = []
     scores: dict[tuple[str, str, str], float] = {}
     citations: dict[tuple[str, str, str], MemoryCitation] = {}
+    documents: dict[tuple[str, str, str], str] = {}
     for query in variants:
         result = await memory.search(SearchMemoryRequest(query=query, mode="fts", limit=max(limit, 40)))
         ranking: list[MemoryCitation] = []
@@ -140,9 +141,36 @@ async def search_pdf_pages(memory, question: str, limit: int = 10) -> tuple[Memo
             citation = MemoryCitation(memory_ref=hit.memory_ref, entry_id=hit.entry_id,
                                       entry_version_id=hit.entry_version_id)
             citations[key] = citation
+            documents[key] = hit.text.partition("\n")[0]
             scores[key] = scores.get(key, 0.0) + 1.0 / (20 + rank)
             ranking.append(citation)
         rankings.append(ranking)
+
+    # Each evidence entry begins with its document ID. In a shared scope,
+    # financially similar reports otherwise compete for the same 20 places.
+    query_words = set(tokens)
+    document_rank: dict[str, float] = {}
+    document_affinity: dict[str, int] = {}
+    for key, score in scores.items():
+        document = documents[key]
+        document_rank[document] = document_rank.get(document, 0.0) + score
+        name_words = set(re.findall(r"[a-z]+|\d+", document.lower()))
+        company_words = {word for word in name_words if len(word) >= 3 and
+                         word not in {"inc", "corp", "company", "annual", "report", "form", "and"}}
+        document_affinity[document] = max(
+            document_affinity.get(document, 0),
+            3 * len({word for word in company_words if not word.isdigit()} & query_words)
+            + len({word for word in name_words if len(word) == 4 and word.isdigit()} & query_words),
+        )
+    best_document = None
+    if document_affinity and max(document_affinity.values()) > 0:
+        best_document = max(document_affinity, key=lambda name:
+                            (document_affinity[name], document_rank[name], name))
+        scores = {key: score for key, score in scores.items() if documents[key] == best_document}
+        rankings = [[citation for citation in ranking if
+                     documents[(citation.memory_ref.artifact_id, citation.entry_id,
+                                citation.entry_version_id)] == best_document]
+                    for ranking in rankings]
 
     selected: list[MemoryCitation] = []
     selected_keys: set[tuple[str, str, str]] = set()
