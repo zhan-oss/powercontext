@@ -48,6 +48,7 @@ else:
 
 from powercontext._logging import log_safely
 from powercontext.builtin.persistence.database import AsyncDatabase
+from powercontext.builtin.persistence.cursors import SourceCursorRepository
 from powercontext.builtin.persistence.errors import ArtifactProcessingLeadershipLostError
 from powercontext.builtin.persistence.processing_intents import ArtifactProcessingIntentRepository
 from powercontext.builtin.persistence.supervision import (
@@ -57,7 +58,11 @@ from powercontext.builtin.persistence.supervision import (
     ArtifactProcessingLeaseRepository,
     database_utc_now,
 )
-from powercontext.builtin.persistence.tables import ARTIFACT_PROCESSING_INTENTS_TABLE, ARTIFACT_PROCESSING_LEASES_TABLE
+from powercontext.builtin.persistence.tables import (
+    ARTIFACT_PROCESSING_INTENTS_TABLE,
+    ARTIFACT_PROCESSING_LEASES_TABLE,
+    SOURCE_JOURNAL_HEADS_TABLE,
+)
 from powercontext.builtin.runtime.processing_contracts import (
     ArtifactProcessingWorkAssignment,
     ArtifactProcessingWorkerCompletion,
@@ -110,6 +115,7 @@ class ArtifactProcessingBinding:
     max_workers: int = 1
     worker_timeout_seconds: float = 600.0
     automatic_processing_interval: timedelta | None = None
+    source_count_threshold: int | None = None
     cron: str | None = None
     timezone: str = "Asia/Shanghai"
     config_prefix: str | None = None
@@ -131,6 +137,10 @@ class ArtifactProcessingBinding:
             raise ValueError("max_workers must be a positive integer")  # noqa: TRY003
         if self.worker_timeout_seconds <= 0:
             raise ValueError("worker_timeout_seconds must be positive")  # noqa: TRY003
+        if self.source_count_threshold is not None and (
+            type(self.source_count_threshold) is not int or self.source_count_threshold < 1
+        ):
+            raise ValueError("source_count_threshold must be a positive integer")
         if self.automatic_processing_interval is not None:
             if self.automatic_processing_interval.total_seconds() <= 0:
                 raise ValueError("automatic interval must be positive")  # noqa: TRY003
@@ -700,6 +710,8 @@ class ArtifactProcessingSupervisor:
 
     async def _discover_automatic(self, state: _FamilyState) -> None:  # noqa: C901 - bounded admission state
         binding = state.binding
+        if binding.source_count_threshold is not None:
+            await self._discover_count(state)
         capacity = self._fresh_capacity(state)
         if capacity <= 0:
             return
@@ -779,6 +791,40 @@ class ArtifactProcessingSupervisor:
         state.scan_in_progress = scan_in_progress
         state.next_schedule_at = next_schedule_at
         state.next_discovery_at = next_discovery_at
+        for scope in admitted:
+            self._enqueue(state, scope)
+
+    async def _discover_count(self, state: _FamilyState) -> None:
+        """Accept durable work when journal progress crosses a family's threshold."""
+        binding = state.binding
+        threshold = binding.source_count_threshold
+        if threshold is None or self._fresh_capacity(state) <= 0:
+            return
+        admitted: list[str] = []
+        async with self._database.transaction() as connection:
+            await self._leases.require_fence(connection, self._require_current_fence())
+            rows = await self._intents.scan(
+                connection, binding.binding_name, limit=_DISCOVERY_PAGE_SIZE, dirty_only=True
+            )
+            cursors = SourceCursorRepository()
+            for row in rows:
+                if len(admitted) >= self._fresh_capacity(state):
+                    break
+                if row.scope_id in state.queued or row.scope_id in state.running or row.scope_id in state.retries:
+                    continue
+                if row.requested_generation > row.handled_generation:
+                    continue
+                high = await connection.scalar(
+                    select(SOURCE_JOURNAL_HEADS_TABLE.c.position).where(
+                        SOURCE_JOURNAL_HEADS_TABLE.c.scope_id == row.scope_id
+                    )
+                )
+                cursor = await cursors.load(connection, row.scope_id, binding.binding_name)
+                consumed = 0 if cursor is None else cursor.cursor.sequence
+                if (0 if high is None else int(high)) - consumed < threshold:
+                    continue
+                await self._intents.request(connection, row.scope_id, binding.binding_name)
+                admitted.append(row.scope_id)
         for scope in admitted:
             self._enqueue(state, scope)
 
