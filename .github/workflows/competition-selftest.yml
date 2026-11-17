@@ -1,17 +1,14 @@
 name: Competition self-test
-
 on:
   push:
     branches: [codex/competition-2026]
   workflow_dispatch:
-
 permissions:
   contents: read
-
 jobs:
-  count-public:
+  public-tests:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
@@ -30,3 +27,7 @@ jobs:
         env:
           PYTEST_ADDOPTS: '-x -vv -s'
         run: make -C public/competition test-count-trigger PRODUCT=$GITHUB_WORKSPACE
+      - name: Run source lifecycle acceptance
+        env:
+          PYTEST_ADDOPTS: '-x -vv -s'
+        run: make -C public/competition test-lifecycle PRODUCT=$GITHUB_WORKSPACE
