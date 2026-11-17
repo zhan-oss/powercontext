@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import math
 import re
 
 from pydantic import BaseModel
@@ -129,12 +130,19 @@ async def search_pdf_pages(memory, question: str, limit: int = 10) -> tuple[Memo
     if len(distinctive) >= 2:
         add_variant(distinctive)
     add_variant(tokens)
+    # Short overlapping windows keep a focused financial phrase searchable
+    # when the complete question combines several facts on different pages.
+    # Sample across the entire question so later clauses are represented too.
+    if len(content) > 4:
+        stride = max(2, math.ceil(len(content) / 9))
+        for start in range(0, len(content) - 1, stride):
+            add_variant(content[start:start + 5])
     rankings: list[list[MemoryCitation]] = []
     scores: dict[tuple[str, str, str], float] = {}
     citations: dict[tuple[str, str, str], MemoryCitation] = {}
     documents: dict[tuple[str, str, str], str] = {}
     for query in variants:
-        result = await memory.search(SearchMemoryRequest(query=query, mode="fts", limit=max(limit, 40)))
+        result = await memory.search(SearchMemoryRequest(query=query, mode="fts", limit=max(limit, 50)))
         ranking: list[MemoryCitation] = []
         for rank, hit in enumerate(result.hits):
             key = (hit.memory_ref.artifact_id, hit.entry_id, hit.entry_version_id)
