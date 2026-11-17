@@ -6,9 +6,9 @@ on:
 permissions:
   contents: read
 jobs:
-  public-tests:
+  count-public:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 8
     steps:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
@@ -27,6 +27,23 @@ jobs:
         env:
           PYTEST_ADDOPTS: '-x -vv -s'
         run: make -C public/competition test-count-trigger PRODUCT=$GITHUB_WORKSPACE
+  lifecycle-public:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: oceanbase/powercontext
+          ref: 2026-competition
+          path: public
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install public test dependencies
+        run: |
+          python -m venv public/competition/.venv
+          public/competition/.venv/bin/pip install -r public/competition/requirements.txt
       - name: Run source lifecycle acceptance
         env:
           PYTEST_ADDOPTS: '-x -vv -s'
