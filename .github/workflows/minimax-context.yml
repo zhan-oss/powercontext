@@ -21,6 +21,9 @@ jobs:
           python minimax/context_cli.py import --data minimax/.run --task shipping-vip > minimax/.run-import.json
           python minimax/context_cli.py context --data minimax/.run --task shipping-vip > minimax/.run-before.json
           python minimax/build_prompt.py minimax/.run-before.json > minimax/.run-prompt.txt
+          echo 'BEGIN_MINIMAX_REQUEST'
+          cat minimax/.run-prompt.txt
+          echo 'END_MINIMAX_REQUEST'
           python minimax/context_cli.py record --data minimax/.run --task shipping-vip --done 'specification and tests imported' --next 'modify shipping code' --verification 'baseline target test fails; regressions pass' > minimax/.run-record.json
           python minimax/context_cli.py context --data minimax/.run --task shipping-vip > minimax/.run-after.json
           python - <<'PY'
