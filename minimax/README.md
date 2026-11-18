@@ -20,11 +20,15 @@ python -m venv .venv
 python -m pip install 'powercontext[builtin]==1.2.0' 'pylibseekdb==1.4.0.post2' 'PyMySQL>=1.1,<2'
 python minimax/context_cli.py import --data minimax/.run --task shipping-vip
 python minimax/context_cli.py context --data minimax/.run --task shipping-vip > minimax/.run/context-before.json
+python minimax/build_prompt.py minimax/.run/context-before.json > minimax/.run/minimax-request.txt
 cd minimax/project
 python -m unittest -v test_shipping
 ```
 
-The last command intentionally fails **only** `test_vip_threshold` before the
+Give `minimax/.run/minimax-request.txt` to MiniMax Code, and save the resulting
+conversation in `records/`. The prompt is constructed from the **actual seekdb
+query output**, with the three source paths and hashes. The last command
+intentionally fails **only** `test_vip_threshold` before the
 MiniMax change. The other two tests are regression controls. Return to the
 repository root before invoking the context CLI again.
 
