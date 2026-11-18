@@ -206,14 +206,21 @@ async def search_pdf_pages(memory, question: str, limit: int = 10) -> tuple[Memo
                         for word in target_terms & words)
             body = hit.text.partition("\n")[2].lower()
             if any(word in target_terms for word in ("revenue", "sales", "margin", "ebitda", "income")):
-                if "statements of income" in body or "statement of operations" in body:
-                    score += 6
+                if ("statement of income" in body or "statements of income" in body
+                        or "statement of operations" in body):
+                    score += 100
             if any(word in target_terms for word in ("cash", "capex", "depreciation", "amortization")):
                 if "statements of cash flows" in body or "statement of cash flows" in body:
-                    score += 6
+                    score += 50
             if any(word in target_terms for word in ("assets", "liabilities", "balance")):
                 if "balance sheets" in body or "balance sheet" in body:
-                    score += 6
+                    score += 50
+            if any(word in target_terms for word in ("legal", "litigation", "battles", "lawsuits")):
+                if re.search(r"item\s+\d+\.\s+legal proceedings", body):
+                    score += 100
+            if any(word in target_terms for word in ("geographies", "geography", "regions", "geographic")):
+                if "our operations" in body and "reportable segments" in body:
+                    score += 100
             broad_rank.append((score, key))
         broad_rank.sort(key=lambda item: (-item[0], item[1]))
 
