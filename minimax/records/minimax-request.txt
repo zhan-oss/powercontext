@@ -1,0 +1,45 @@
+Task: Add the VIP free-shipping threshold while preserving regular orders and invalid-input behavior.
+Use the current specification, source, and tests below to change the code.
+Return a unified diff for project/shipping.py and a short explanation.
+Preserve the regular-order and invalid-input behavior. Do not edit tests.
+
+--- spec: specs/shipping.md (SHA-256 08487906c69a6d116b840c5d3f32301c941761fd772170c0504ee3a2c52b4a72) ---
+# Shipping fee specification
+
+Status: current. Task: `shipping-vip`.
+
+- A regular order has free shipping when its subtotal is at least 10,000 cents.
+- A VIP order has free shipping when its subtotal is at least 8,000 cents.
+- Otherwise shipping costs 1,200 cents.
+- A negative subtotal is invalid and raises `ValueError`.
+- The boundary values are inclusive, and the existing regular-order behavior must remain valid.
+
+--- code: shipping.py (SHA-256 fea07aa3b6d27f05857532170f589ff37dc0eec348df7e501a80287a87bf1a75) ---
+"""Shipping quote rules for the small order service."""
+
+
+def shipping_fee_cents(subtotal_cents: int, *, vip: bool = False) -> int:
+    if subtotal_cents < 0:
+        raise ValueError("subtotal must be nonnegative")
+    if subtotal_cents >= 10_000:
+        return 0
+    return 1_200
+
+--- test: test_shipping.py (SHA-256 0d0494fc19b702e469aaf76aeaab5ca9d37a38ee646ea94da02b0bf972a37404) ---
+import unittest
+
+from shipping import shipping_fee_cents
+
+
+class ShippingFeeTests(unittest.TestCase):
+    def test_vip_threshold(self):
+        self.assertEqual(shipping_fee_cents(8_000, vip=True), 0)
+        self.assertEqual(shipping_fee_cents(7_999, vip=True), 1_200)
+
+    def test_regular_threshold(self):
+        self.assertEqual(shipping_fee_cents(10_000), 0)
+        self.assertEqual(shipping_fee_cents(9_999), 1_200)
+
+    def test_negative_subtotal(self):
+        with self.assertRaises(ValueError):
+            shipping_fee_cents(-1, vip=True)
