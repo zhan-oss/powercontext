@@ -50,7 +50,7 @@ def parse_pdf_document(value: PDFDocumentInput) -> tuple[PDFPageInput, ...]:
                 document_id=value.document_id,
                 document_sha256=digest,
                 page_number=number,
-                text=page.extract_text() or "",
+                text=" ".join((page.extract_text() or "").split()),
             )
             for number, page in enumerate(reader.pages, start=1)
         )
@@ -180,6 +180,43 @@ async def search_pdf_pages(memory, question: str, limit: int = 10) -> tuple[Memo
                                 citation.entry_version_id)] == best_document]
                     for ranking in rankings]
 
+    # A document identifier is present in every stored page. Once a query has
+    # identified its report, search that identifier to inspect the complete
+    # report, including pages that were absent from the narrow FTS results.
+    broad_rank: list[tuple[float, tuple[str, str, str]]] = []
+    if best_document:
+        all_pages = await memory.search(SearchMemoryRequest(query=best_document, mode="fts", limit=1400))
+        report_terms = set(re.findall(r"[a-z]+|\d+", best_document.lower()))
+        target_terms = set(content) - report_terms
+        page_terms = []
+        frequencies: dict[str, int] = {}
+        for hit in all_pages.hits:
+            document, _, body = hit.text.partition("\n")
+            if document != best_document:
+                continue
+            words = set(re.findall(r"[a-z]+|\d+", body.lower()))
+            page_terms.append((hit, words))
+            for word in target_terms & words:
+                frequencies[word] = frequencies.get(word, 0) + 1
+        for hit, words in page_terms:
+            key = (hit.memory_ref.artifact_id, hit.entry_id, hit.entry_version_id)
+            citations[key] = MemoryCitation(memory_ref=hit.memory_ref, entry_id=hit.entry_id,
+                                            entry_version_id=hit.entry_version_id)
+            score = sum(math.log((len(page_terms) + 1) / (frequencies[word] + 1)) + 1
+                        for word in target_terms & words)
+            body = hit.text.partition("\n")[2].lower()
+            if any(word in target_terms for word in ("revenue", "sales", "margin", "ebitda", "income")):
+                if "statements of income" in body or "statement of operations" in body:
+                    score += 6
+            if any(word in target_terms for word in ("cash", "capex", "depreciation", "amortization")):
+                if "statements of cash flows" in body or "statement of cash flows" in body:
+                    score += 6
+            if any(word in target_terms for word in ("assets", "liabilities", "balance")):
+                if "balance sheets" in body or "balance sheet" in body:
+                    score += 6
+            broad_rank.append((score, key))
+        broad_rank.sort(key=lambda item: (-item[0], item[1]))
+
     selected: list[MemoryCitation] = []
     selected_keys: set[tuple[str, str, str]] = set()
     def append(citation: MemoryCitation) -> None:
@@ -190,6 +227,10 @@ async def search_pdf_pages(memory, question: str, limit: int = 10) -> tuple[Memo
 
     for key in sorted(scores, key=lambda item: (-scores[item], item))[: max(1, limit // 2)]:
         append(citations[key])
+    for _, key in broad_rank:
+        append(citations[key])
+        if len(selected) >= min(limit, limit // 2 + max(1, limit // 3)):
+            break
     for rank in range(max((len(ranking) for ranking in rankings), default=0)):
         for ranking in rankings:
             if rank < len(ranking):
