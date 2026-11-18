@@ -1,0 +1,37 @@
+name: MiniMax SDD context
+
+on:
+  push:
+    branches: [2026-competition-ecosystem]
+    paths: ["minimax/**", ".github/workflows/minimax-context.yml"]
+  workflow_dispatch:
+
+jobs:
+  context:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install documented dependencies
+        run: python -m pip install 'powercontext[builtin]==1.2.0' 'pylibseekdb==1.4.0.post2' 'PyMySQL>=1.1,<2'
+      - name: Query seekdb and resume PowerContext
+        run: |
+          python minimax/context_cli.py import --data minimax/.run --task shipping-vip > minimax/.run-import.json
+          python minimax/context_cli.py context --data minimax/.run --task shipping-vip > minimax/.run-before.json
+          python minimax/context_cli.py record --data minimax/.run --task shipping-vip --done 'specification and tests imported' --next 'modify shipping code' --verification 'baseline target test fails; regressions pass' > minimax/.run-record.json
+          python minimax/context_cli.py context --data minimax/.run --task shipping-vip > minimax/.run-after.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          before = json.loads(Path('minimax/.run-before.json').read_text())
+          after = json.loads(Path('minimax/.run-after.json').read_text())
+          assert [item['path'] for item in before['sources']] == [
+              'specs/shipping.md', 'shipping.py', 'test_shipping.py'
+          ]
+          assert before['previous_state'] == []
+          assert any('specification and tests imported' in state for state in after['previous_state'])
+          print('seekdb sources and PowerContext restart: passed')
+          PY
+
