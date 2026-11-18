@@ -1,0 +1,13 @@
+{
+  "tasks": {
+    "shipping-vip": {
+      "summary": "Add the VIP free-shipping threshold while preserving regular orders and invalid-input behavior.",
+      "sources": [
+        {"kind": "spec", "path": "specs/shipping.md"},
+        {"kind": "code", "path": "shipping.py"},
+        {"kind": "test", "path": "test_shipping.py"}
+      ]
+    }
+  }
+}
+
