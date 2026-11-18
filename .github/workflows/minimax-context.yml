@@ -34,4 +34,36 @@ jobs:
           assert any('specification and tests imported' in state for state in after['previous_state'])
           print('seekdb sources and PowerContext restart: passed')
           PY
+      - name: Check functional baseline and specification refresh
+        run: |
+          python - <<'PY'
+          import subprocess
+          import sys
+          result = subprocess.run([sys.executable, '-m', 'unittest', '-v', 'test_shipping'],
+                                  cwd='minimax/project', capture_output=True, text=True)
+          print(result.stderr)
+          assert result.returncode == 1
+          assert 'FAIL: test_vip_threshold' in result.stderr
+          assert 'test_regular_threshold' in result.stderr
+          assert 'test_negative_subtotal' in result.stderr
+          print('baseline target behavior: failed as expected')
+          PY
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('minimax/project/specs/shipping.md')
+          path.write_text(path.read_text().replace('8,000 cents', '8,500 cents'))
+          PY
+          python minimax/context_cli.py import --data minimax/.run --task shipping-vip > minimax/.run-import-updated.json
+          python minimax/context_cli.py context --data minimax/.run --task shipping-vip > minimax/.run-updated.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          original = json.loads(Path('minimax/.run-before.json').read_text())
+          updated = json.loads(Path('minimax/.run-updated.json').read_text())
+          old_spec = next(item for item in original['sources'] if item['kind'] == 'spec')
+          new_spec = next(item for item in updated['sources'] if item['kind'] == 'spec')
+          assert '8,500 cents' in new_spec['content']
+          assert old_spec['sha256'] != new_spec['sha256']
+          print('specification reimport and refreshed query: passed')
+          PY
 
